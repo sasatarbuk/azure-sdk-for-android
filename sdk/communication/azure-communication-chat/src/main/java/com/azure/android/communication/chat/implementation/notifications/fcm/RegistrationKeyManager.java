@@ -128,13 +128,21 @@ public final class RegistrationKeyManager {
     }
 
     private int getNumOfPairs() {
-        int numKeyPairs = 0;
+        int lastIndex = 0;
         try {
-            numKeyPairs = Math.max(keyStore.size(), keyMetaDataStore.getSize()) / 2;
+            Set<String> aliases = keyMetaDataStore.getAliases();
+            for (String alias : aliases) {
+                if (alias.startsWith(CRYPTO_KEY_PREFIX)) {
+                    Integer index = extractIndex(alias);
+                    if (index != null && index > lastIndex) {
+                        lastIndex = index;
+                    }
+                }
+            }
         } catch (Exception e) {
             throw clientLogger.logExceptionAsError(new RuntimeException("Failed to get size from key store", e));
         }
-        return numKeyPairs;
+        return lastIndex + 1;
     }
 
     public void refreshCredentials(String directoryPath, Context context) {
@@ -153,11 +161,11 @@ public final class RegistrationKeyManager {
         }
     }
 
-    private int extractIndex(String alias) {
+    private Integer extractIndex(String alias) {
         if (alias.indexOf(CRYPTO_KEY_PREFIX) == 0) {
             return Integer.parseInt(alias.substring(alias.lastIndexOf('_') + 1));
         }
-        return Integer.parseInt(alias.substring(alias.lastIndexOf('_') + 1));
+        return null;
     }
 
     // Clear keys created more than #{EXPIRATION_TIME_MINUTES} and keeps records consistent across key-store and key-creation-time-store
@@ -168,14 +176,20 @@ public final class RegistrationKeyManager {
         try {
             Enumeration<String> aliases = keyStore.aliases();
             while (aliases.hasMoreElements()) {
-                set.add(extractIndex(aliases.nextElement()));
+                Integer index = extractIndex(aliases.nextElement());
+                if (index != null) {
+                    set.add(index);
+                }
             }
         } catch (KeyStoreException e) {
             throw clientLogger.logExceptionAsError(new RuntimeException("Failed iterate key-store", e));
         }
         Set<String> aliases = keyMetaDataStore.getAliases();
         for (String alias : aliases) {
-            set.add(extractIndex(alias));
+            Integer index = extractIndex(alias);
+            if (index != null) {
+                set.add(index);
+            }
         }
 
         //Delete expired keys or inconsistent records
@@ -340,9 +354,13 @@ public final class RegistrationKeyManager {
         String authAlias = AUTH_KEY_PREFIX + index;
         KeyMetaDataStore.KeyMetaDataEntry cryptoEntry = keyMetaDataStore.getEntry(cryptoAlias);
         KeyMetaDataStore.KeyMetaDataEntry authEntry = keyMetaDataStore.getEntry(authAlias);
-        SecretKey cryptoKey = recoverSecretKey(cryptoAlias, cryptoEntry);
-        SecretKey authKey = recoverSecretKey(authAlias, authEntry);
-        return new Pair<>(cryptoKey, authKey);
+        if (cryptoEntry != null && authEntry != null) {
+            SecretKey cryptoKey = recoverSecretKey(cryptoAlias, cryptoEntry);
+            SecretKey authKey = recoverSecretKey(authAlias, authEntry);
+            return new Pair<>(cryptoKey, authKey);
+        } else {
+            return null;
+        }
     }
 
     public Pair<SecretKey, SecretKey> getLastPair() {
@@ -357,7 +375,9 @@ public final class RegistrationKeyManager {
             Queue<Pair<SecretKey, SecretKey>> res = new LinkedList<>();
             for (int i = pairs; i >= 0; i--) {
                 Pair<SecretKey, SecretKey> pair = getOnePair(i);
-                res.offer(pair);
+                if (pair != null) {
+                    res.offer(pair);
+                }
             }
             return res;
         }
